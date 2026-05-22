@@ -1,0 +1,11 @@
+overrides:
+  tar@<7.5.11: '>=7.5.11'
+
+allowBuilds:
+  '@google/genai': set this to true or false
+  koffi: set this to true or false
+  lefthook: false
+  protobufjs: set this to true or false
+catalogMode: manual
+engineStrict: true
+saveExact: true

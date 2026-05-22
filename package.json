@@ -1,0 +1,78 @@
+{
+  "name": "@kimuson/pi-auto",
+  "version": "0.0.0",
+  "description": "pi package foundation for pi-auto",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d-kimuson/pi-auto.git"
+  },
+  "files": [
+    "extensions",
+    "prompts",
+    "skills",
+    "src",
+    "themes",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsgo -p . --noEmit",
+    "test": "vitest run",
+    "prepare": "test ! -d .git || lefthook install",
+    "lint": "run-p lint:*",
+    "lint:oxlint": "oxlint --ignore-path .gitignore --no-error-on-unmatched-pattern",
+    "lint:oxfmt": "pnpm fix:oxfmt --check",
+    "fix": "run-p fix:*",
+    "fix:oxlint": "pnpm lint:oxlint --fix",
+    "fix:oxfmt": "oxfmt --ignore-path .gitignore --no-error-on-unmatched-pattern",
+    "check:pack": "node scripts/check-pack.ts",
+    "release": "node scripts/release.ts",
+    "build": "echo No build step required for pi package"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "2.0.8",
+    "@types/node": "25.9.0",
+    "@typescript/native-preview": "7.0.0-dev.20260518.1",
+    "changelogithub": "14.0.0",
+    "clean-pkg-json": "1.4.2",
+    "gatecheck": "0.0.1",
+    "inquirer": "13.4.2",
+    "lefthook": "2.1.6",
+    "npm-run-all2": "8.0.4",
+    "oxfmt": "0.50.0",
+    "oxlint": "1.65.0",
+    "oxlint-tsgolint": "0.23.0",
+    "tsdown": "0.22.0",
+    "vitest": "4.1.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "packageManager": "pnpm@11.1.3+sha512.c85357fe17ca12dd23dd7071822666dfd7e3cb76fe214e3370b5ea2fb34f2a231185509b63e717f3cd0acb38dd3f8d82bcd5e8172400ae678b70ea4fbed0896d",
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  }
+}
