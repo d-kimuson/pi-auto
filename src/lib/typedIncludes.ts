@@ -1,5 +1,5 @@
 export const typedIncludes = <const T extends unknown>(
   array: readonly T[],
   value: unknown,
-  // oxlint-disable-next-line no-unsafe-type-assertion
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
 ): value is T => (array as unknown[]).includes(value);

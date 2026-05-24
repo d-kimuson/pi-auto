@@ -74,5 +74,8 @@
     "themes": [
       "./themes"
     ]
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.49"
   }
 }

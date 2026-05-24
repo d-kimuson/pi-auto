@@ -9,7 +9,7 @@ export const controllablePromise = <T>(): ControllablePromise<T> => {
   let promiseResolve: ((value: T) => void) | undefined;
   let promiseReject: ((reason?: unknown) => void) | undefined;
 
-  // oxlint-disable-next-line no-unsafe-type-assertion
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const promiseRef = {
     status: 'pending',
   } as ControllablePromise<T>;
