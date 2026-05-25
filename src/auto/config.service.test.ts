@@ -18,7 +18,6 @@ import { DEFAULT_AUTO_CONFIG, type AutoConfig } from './types.pure.ts';
 
 const testDir = path.join(tmpdir(), `pi-auto-test-${Date.now()}`);
 const settingsPath = path.join(testDir, '.pi', 'agent', 'settings.json');
-const legacyPath = path.join(testDir, '.pi', 'auto.json');
 
 beforeEach(() => {
   rmSync(testDir, { recursive: true, force: true });
@@ -51,21 +50,6 @@ describe('loadAutoConfig', () => {
     expect(loaded).toEqual(config);
   });
 
-  it('falls back to legacy .pi/auto.json', () => {
-    mkdirSync(path.dirname(legacyPath), { recursive: true });
-    writeFileSync(
-      legacyPath,
-      JSON.stringify({
-        ...DEFAULT_AUTO_CONFIG,
-        denyRead: ['~/.ssh'],
-      }),
-      'utf-8',
-    );
-
-    const loaded = loadAutoConfig(testDir);
-    expect(loaded.denyRead).toEqual(['~/.ssh']);
-  });
-
   it('returns default config for malformed JSON', () => {
     mkdirSync(path.dirname(settingsPath), { recursive: true });
     writeFileSync(settingsPath, '{ invalid json }', 'utf-8');
@@ -84,7 +68,7 @@ describe('loadAutoConfig', () => {
 });
 
 describe('saveAutoConfig', () => {
-  it('writes config to .pi/agent/settings.json under auto', () => {
+  it('writes config to .pi/agent/settings.json under auto only', () => {
     const config: AutoConfig = {
       ...DEFAULT_AUTO_CONFIG,
       allowWrite: ['.'],
@@ -99,6 +83,7 @@ describe('saveAutoConfig', () => {
       ...DEFAULT_AUTO_CONFIG,
       allowWrite: ['.'],
     });
+    expect(raw['auto-mode-permissions']).toBeUndefined();
   });
 
   it('preserves unrelated settings keys', () => {
@@ -116,6 +101,7 @@ describe('saveAutoConfig', () => {
       ...DEFAULT_AUTO_CONFIG,
       denyRead: ['~/.ssh'],
     });
+    expect(raw['auto-mode-permissions']).toBeUndefined();
   });
 });
 

@@ -5,12 +5,13 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
   type ExtensionAPI,
+  type ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
-import { existsSync, readFileSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { existsSync } from 'node:fs';
 
 import { collectApprovalContext, runApprovalAgent } from '../src/auto/approval-agent.service.ts';
+import { readRecentApprovalLogs } from '../src/auto/approval-log-reader.service.ts';
+import { getApprovalLogFile } from '../src/auto/approval-logger.service.ts';
 import {
   decideToolCall,
   disableAutoMode,
@@ -23,10 +24,15 @@ import {
   logSrtAllowed,
   logSrtBlocked,
 } from '../src/auto/auto-mode.service.ts';
-import { loadAutoConfig, saveAutoConfig } from '../src/auto/config.service.ts';
+import { loadAutoConfig } from '../src/auto/config.service.ts';
 import { evaluateBashNetworkPolicy } from '../src/auto/network-policy.service.pure.ts';
 import { isReadDenied, isWriteAllowed } from '../src/auto/path-check.service.pure.ts';
 import { formatPermissionSpec } from '../src/auto/permission-spec.service.pure.ts';
+import {
+  formatApprovalLogSummary,
+  summarizeApprovalLogs,
+} from '../src/auto/refine-auto-permissions.service.pure.ts';
+import { loadRefineState, saveRefineState } from '../src/auto/refine-state.service.ts';
 import {
   createLocalBashOperationsWithSandbox,
   createSandboxedEditOperations,
@@ -37,6 +43,7 @@ import {
   getSandboxAvailabilityIssue,
   resetSandboxRuntime,
 } from '../src/auto/sandbox-runtime.service.ts';
+import { formatAutoModeStatus } from '../src/auto/status-line.service.pure.ts';
 
 const createDecision = (
   toolName: string,
@@ -503,6 +510,21 @@ const createBashOverride = (pi: ExtensionAPI) => ({
   },
 });
 
+const AUTO_MODE_STATUS_KEY = 'pi-auto:auto-mode';
+
+const setAutoModeStatus = (
+  ctx: ExtensionContext,
+  config?: Pick<ReturnType<typeof enableAutoMode>, 'allowTools' | 'denyTools'>,
+): void => {
+  if (config === undefined) {
+    ctx.ui.setStatus(AUTO_MODE_STATUS_KEY, undefined);
+    return;
+  }
+
+  const label = ctx.ui.theme.fg('accent', formatAutoModeStatus());
+  ctx.ui.setStatus(AUTO_MODE_STATUS_KEY, label);
+};
+
 export default function (pi: ExtensionAPI) {
   pi.registerFlag('auto', {
     description: 'Enable auto mode (automatic tool approval with sandboxing)',
@@ -518,12 +540,15 @@ export default function (pi: ExtensionAPI) {
 
       if (isAutoModeEnabled(cwd, sessionId)) {
         disableAutoMode(cwd, sessionId);
+        setAutoModeStatus(ctx);
         ctx.ui.notify('Auto mode disabled.', 'info');
         return Promise.resolve();
       }
 
       const config = enableAutoMode(cwd, sessionId);
       const availabilityIssue = getSandboxAvailabilityIssue();
+
+      setAutoModeStatus(ctx, config);
 
       ctx.ui.notify(
         `Auto mode enabled. Config: ${config.allowTools.length} allowTools, ${config.denyTools.length} denyTools`,
@@ -540,114 +565,84 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand('refine-auto-permissions', {
     description:
-      'Extract frequent patterns from approval logs and suggest additions to auto config',
-    handler: async (_args, ctx) => {
-      const logFile = path.join(os.homedir(), '.pi', 'extensions', 'pi-auto', 'approvals.jsonl');
+      'Aggregate approval logs and send a refinement prompt to the current agent session',
+    handler: (_args, ctx) => {
+      const logFile = getApprovalLogFile();
 
       if (!existsSync(logFile)) {
         ctx.ui.notify('No approval logs found. Run with auto mode first.', 'warning');
-        return;
+        return Promise.resolve();
       }
 
       try {
-        const rawText = readFileSync(logFile, 'utf-8');
-        const lines = rawText.trim().split('\n').filter(Boolean);
-        const entries: Record<string, unknown>[] = [];
+        const refineState = loadRefineState();
+        const recentLogs = readRecentApprovalLogs(logFile, {
+          since: refineState.lastRefinedAt,
+        });
+        const summary = summarizeApprovalLogs(recentLogs.entries, { minCount: 2, limit: 200 });
 
-        for (const line of lines) {
-          const parsed: unknown = JSON.parse(line);
-
-          if (typeof parsed === 'object' && parsed !== null) {
-            entries.push(Object.fromEntries(Object.entries(parsed)));
-          }
-        }
-
-        const approvedPatterns = new Map<string, number>();
-        const sandboxAllowedPatterns = new Map<string, number>();
-
-        for (const entry of entries) {
-          const decision = entry['decision'];
-          const permissionSpec = entry['permissionSpec'];
-
-          if (typeof permissionSpec !== 'string') {
-            continue;
-          }
-
-          if (decision === 'agent-approve') {
-            approvedPatterns.set(permissionSpec, (approvedPatterns.get(permissionSpec) ?? 0) + 1);
-          }
-
-          if (decision === 'srt-allowed') {
-            sandboxAllowedPatterns.set(
-              permissionSpec,
-              (sandboxAllowedPatterns.get(permissionSpec) ?? 0) + 1,
-            );
-          }
-        }
-
-        const allPatterns = [
-          ...[...approvedPatterns.entries()].map(([spec, count]) => ({
-            spec,
-            count,
-            source: 'agent-approve' as const,
-          })),
-          ...[...sandboxAllowedPatterns.entries()].map(([spec, count]) => ({
-            spec,
-            count,
-            source: 'srt-allowed' as const,
-          })),
-        ]
-          .filter((entry) => entry.count >= 2)
-          .sort((a, b) => b.count - a.count);
-
-        if (allPatterns.length === 0) {
+        if (summary.permissionSpecs.length === 0) {
           ctx.ui.notify(
-            'No patterns appeared 2+ times. Keep using auto mode to gather more data.',
+            'No permission specs appeared 2+ times since the last refine. Keep using auto mode to gather more data.',
             'info',
           );
-          return;
+          return Promise.resolve();
         }
 
-        const items = allPatterns.map(
-          (entry) => `${entry.spec} (${entry.source}: ${entry.count}x)`,
-        );
-        const selected = await ctx.ui.select(
-          'Select patterns to add to allowTools (or Esc to cancel):',
-          items,
-        );
+        const currentConfig = loadAutoConfig(ctx.cwd);
+        const prompt = [
+          'これまでの判断ログから、機械的にチェックする permission に昇華させます。',
+          '',
+          '以下は approval log の集計結果です。これを元に、追加すべき permission 案を作成してください。',
+          '危険な一般化は避け、根拠が弱いものは追加しないでください。',
+          '',
+          '次の手順で進めてください:',
+          '1. allowTools / denyTools / allowedDomains の追加案を検討する',
+          '2. 追加候補をユーザーに提示して承認を求める',
+          '3. ユーザーが承認したら ~/.pi/agent/settings.json の auto.{allowTools,denyTools,allowedDomains} を更新する',
+          '',
+          '## Current Config',
+          '```json',
+          JSON.stringify(
+            {
+              auto: currentConfig,
+            },
+            null,
+            2,
+          ),
+          '```',
+          '',
+          '## Approval Log Summary',
+          formatApprovalLogSummary(summary),
+          '',
+          '## Refine Window',
+          `lastRefinedAt: ${refineState.lastRefinedAt ?? '(none)'}`,
+          `scannedBytes: ${recentLogs.scannedBytes}`,
+          `truncated: ${recentLogs.truncated ? 'yes' : 'no'}`,
+        ].join('\n');
 
-        if (selected === undefined) {
-          return;
+        const latestTimestamp = recentLogs.entries[recentLogs.entries.length - 1]?.timestamp;
+
+        if (ctx.isIdle()) {
+          pi.sendUserMessage(prompt);
+          if (latestTimestamp !== undefined) {
+            saveRefineState({ lastRefinedAt: latestTimestamp });
+          }
+          return Promise.resolve();
         }
 
-        const selectedIndex = items.indexOf(selected);
-        const selectedPattern = selectedIndex === -1 ? undefined : allPatterns[selectedIndex];
-
-        if (selectedPattern === undefined) {
-          return;
+        pi.sendUserMessage(prompt, { deliverAs: 'followUp' });
+        ctx.ui.notify('Refine prompt queued as follow-up.', 'info');
+        if (latestTimestamp !== undefined) {
+          saveRefineState({ lastRefinedAt: latestTimestamp });
         }
-
-        const config = loadAutoConfig(ctx.cwd);
-
-        if (config.allowTools.includes(selectedPattern.spec)) {
-          ctx.ui.notify(`"${selectedPattern.spec}" is already in allowTools.`, 'info');
-          return;
-        }
-
-        saveAutoConfig(ctx.cwd, {
-          ...config,
-          allowTools: [...config.allowTools, selectedPattern.spec],
-        });
-
-        ctx.ui.notify(
-          `Added "${selectedPattern.spec}" to allowTools. Reload or restart auto mode to apply.`,
-          'info',
-        );
+        return Promise.resolve();
       } catch (error) {
         ctx.ui.notify(
-          `Failed to parse approval logs: ${error instanceof Error ? error.message : String(error)}`,
+          `Failed to prepare refine prompt: ${error instanceof Error ? error.message : String(error)}`,
           'error',
         );
+        return Promise.resolve();
       }
     },
   });
@@ -662,6 +657,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on('session_start', (_event, ctx) => {
+    setAutoModeStatus(ctx);
+
     if (pi.getFlag('auto') !== true) {
       return;
     }
@@ -670,6 +667,8 @@ export default function (pi: ExtensionAPI) {
     const sessionId = ctx.sessionManager.getSessionId();
     const config = enableAutoMode(cwd, sessionId);
     const availabilityIssue = getSandboxAvailabilityIssue();
+
+    setAutoModeStatus(ctx, config);
 
     ctx.ui.notify(
       `Auto mode enabled via --auto flag. Config: ${config.allowTools.length} allowTools, ${config.denyTools.length} denyTools`,

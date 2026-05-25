@@ -6,6 +6,8 @@ import type {
   ExtensionAPI,
 } from '@earendil-works/pi-coding-agent';
 
+type ExecCapableExtensionApi = Pick<ExtensionAPI, 'exec'>;
+
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +16,10 @@ import { fileURLToPath } from 'node:url';
 import type { AutoConfig } from './types.pure.ts';
 
 import { buildSrtConfig } from './sandbox-config.service.pure.ts';
-import { wrapCommandWithSandbox } from './sandbox-runtime.service.ts';
+import {
+  cleanupSandboxRuntimeAfterCommand,
+  wrapCommandWithSandbox,
+} from './sandbox-runtime.service.ts';
 
 const HELPER_PATH = fileURLToPath(new URL('./sandbox-fs-helper.mjs', import.meta.url));
 
@@ -78,7 +83,7 @@ const toError = (failure: FsHelperFailure): Error => {
 const escapeShellArg = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 const runSandboxedRequest = async (
-  pi: ExtensionAPI,
+  pi: ExecCapableExtensionApi,
   cwd: string,
   signal: AbortSignal | undefined,
   config: AutoConfig,
@@ -86,6 +91,8 @@ const runSandboxedRequest = async (
 ): Promise<FsHelperResponse> => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'pi-auto-sandbox-fs-'));
   const requestPath = path.join(tempDir, 'request.json');
+
+  let cleanupNeeded = false;
 
   try {
     await writeFile(requestPath, JSON.stringify(request), 'utf8');
@@ -95,6 +102,7 @@ const runSandboxedRequest = async (
       buildSrtConfig(cwd, config),
       signal,
     );
+    cleanupNeeded = true;
     const result = await pi.exec('bash', ['-lc', wrappedCommand], {
       cwd,
       signal,
@@ -107,13 +115,17 @@ const runSandboxedRequest = async (
 
     return parseFsHelperResponse(result.stdout);
   } finally {
+    if (cleanupNeeded) {
+      cleanupSandboxRuntimeAfterCommand();
+    }
+
     await unlink(requestPath).catch(() => undefined);
     await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 };
 
 export const createSandboxedReadOperations = (
-  pi: ExtensionAPI,
+  pi: ExecCapableExtensionApi,
   cwd: string,
   signal: AbortSignal | undefined,
   config: AutoConfig,
@@ -145,7 +157,7 @@ export const createSandboxedReadOperations = (
 });
 
 export const createSandboxedWriteOperations = (
-  pi: ExtensionAPI,
+  pi: ExecCapableExtensionApi,
   cwd: string,
   signal: AbortSignal | undefined,
   config: AutoConfig,
@@ -175,7 +187,7 @@ export const createSandboxedWriteOperations = (
 });
 
 export const createSandboxedEditOperations = (
-  pi: ExtensionAPI,
+  pi: ExecCapableExtensionApi,
   cwd: string,
   signal: AbortSignal | undefined,
   config: AutoConfig,
@@ -230,6 +242,11 @@ export const createLocalBashOperationsWithSandbox = (
       buildSrtConfig(cwd, config),
       signal,
     );
-    return localOperations.exec(wrappedCommand, execCwd, options);
+
+    try {
+      return await localOperations.exec(wrappedCommand, execCwd, options);
+    } finally {
+      cleanupSandboxRuntimeAfterCommand();
+    }
   },
 });

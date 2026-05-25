@@ -5,7 +5,7 @@ import { DEFAULT_AUTO_CONFIG, type AutoConfig } from './types.pure.ts';
 
 const getConfigDir = (cwd: string): string => path.join(cwd, '.pi', 'agent');
 const getConfigFile = (cwd: string): string => path.join(getConfigDir(cwd), 'settings.json');
-const getLegacyConfigFile = (cwd: string): string => path.join(cwd, '.pi', 'auto.json');
+const AUTO_SETTINGS_KEY = 'auto';
 
 const readStringArray = (value: unknown): readonly string[] => {
   if (!Array.isArray(value)) {
@@ -52,59 +52,38 @@ const readJsonFile = (file: string): unknown => {
 const loadFromSettingsFile = (cwd: string): AutoConfig | undefined => {
   const raw = readJsonFile(getConfigFile(cwd));
 
-  if (typeof raw !== 'object' || raw === null || !('auto' in raw)) {
+  if (typeof raw !== 'object' || raw === null) {
     return undefined;
   }
 
-  const auto = raw.auto;
+  const section = getObjectField(raw, AUTO_SETTINGS_KEY);
 
-  if (!isAutoConfig(auto)) {
+  if (!isAutoConfig(section)) {
     return undefined;
   }
 
-  return parseAutoConfig(auto);
+  return parseAutoConfig(section);
 };
 
-const loadFromLegacyFile = (cwd: string): AutoConfig | undefined => {
-  const raw = readJsonFile(getLegacyConfigFile(cwd));
-
-  if (!isAutoConfig(raw)) {
-    return undefined;
-  }
-
-  return parseAutoConfig(raw);
-};
-
-export const loadAutoConfig = (cwd: string): AutoConfig => {
-  const fromSettings = loadFromSettingsFile(cwd);
-
-  if (fromSettings !== undefined) {
-    return fromSettings;
-  }
-
-  const fromLegacy = loadFromLegacyFile(cwd);
-
-  if (fromLegacy !== undefined) {
-    return fromLegacy;
-  }
-
-  return { ...DEFAULT_AUTO_CONFIG };
-};
+export const loadAutoConfig = (cwd: string): AutoConfig =>
+  loadFromSettingsFile(cwd) ?? { ...DEFAULT_AUTO_CONFIG };
 
 export const saveAutoConfig = (cwd: string, config: AutoConfig): void => {
   const dir = getConfigDir(cwd);
   mkdirSync(dir, { recursive: true });
 
   const rawSettings = readJsonFile(getConfigFile(cwd));
-  const settings =
-    typeof rawSettings === 'object' && rawSettings !== null ? { ...rawSettings } : {};
+  const settings: Record<string, unknown> =
+    typeof rawSettings === 'object' && rawSettings !== null
+      ? Object.fromEntries(Object.entries(rawSettings))
+      : {};
 
   writeFileSync(
     getConfigFile(cwd),
     JSON.stringify(
       {
         ...settings,
-        auto: config,
+        [AUTO_SETTINGS_KEY]: config,
       },
       null,
       2,
