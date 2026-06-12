@@ -15,6 +15,7 @@ describe('buildSrtConfig', () => {
     expect(config.filesystem.allowWrite).toBeDefined();
     expect(config.filesystem.allowWrite).toContain('.');
     expect(config.filesystem.allowWrite).toContain('/tmp');
+    expect(config.filesystem.allowWrite).toContain('~/.pi/agent');
 
     expect(config.filesystem.denyWrite).toBeDefined();
     expect(config.filesystem.denyWrite).toContain('.env');

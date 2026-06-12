@@ -371,144 +371,187 @@ const createEditOverride = (pi: ExtensionAPI) => ({
   },
 });
 
-const createBashOverride = (pi: ExtensionAPI) => ({
-  ...createBashToolDefinition(process.cwd()),
-  label: 'bash',
-  async execute(
-    toolCallId: string,
-    params: { command: string; timeout?: number },
-    signal: AbortSignal | undefined,
-    onUpdate: Parameters<ReturnType<typeof createBashToolDefinition>['execute']>[3],
-    ctx: Parameters<ReturnType<typeof createBashToolDefinition>['execute']>[4],
-  ) {
-    const sessionId = ctx.sessionManager.getSessionId();
-    const unsandboxedBase = createBashToolDefinition(ctx.cwd);
+const createBashOverride = (pi: ExtensionAPI) => {
+  const base = createBashToolDefinition(process.cwd());
+  return Object.assign(base, {
+    label: 'bash',
+    parameters: {
+      ...base.parameters,
+      properties: {
+        ...(base.parameters as { properties: Record<string, unknown> }).properties,
+        requireApproval: {
+          type: 'boolean',
+          description:
+            'When true, skip sandbox and send directly to approval agent. Use for commands known to fail in sandbox (git push, SSH, network tools, etc.).',
+          default: false,
+        },
+      },
+    },
+    async execute(
+      toolCallId: string,
+      params: { command: string; timeout?: number; requireApproval?: boolean },
+      signal: AbortSignal | undefined,
+      onUpdate: Parameters<ReturnType<typeof createBashToolDefinition>['execute']>[3],
+      ctx: Parameters<ReturnType<typeof createBashToolDefinition>['execute']>[4],
+    ) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const unsandboxedBase = createBashToolDefinition(ctx.cwd);
 
-    if (!isAutoModeEnabled(ctx.cwd, sessionId)) {
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
+      if (!isAutoModeEnabled(ctx.cwd, sessionId)) {
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
 
-    const { permissionSpec, decision } = createDecision('bash', params, ctx.cwd, sessionId);
-    const autoDenyError = createAutoDenyError(ctx.cwd, sessionId, 'bash', permissionSpec, decision);
-
-    if (autoDenyError !== undefined) {
-      throw autoDenyError;
-    }
-
-    logAutoApprovalIfNeeded(ctx.cwd, sessionId, 'bash', permissionSpec, decision);
-
-    if (decision.kind === 'auto-approve') {
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
-
-    const config = getSessionConfig(ctx.cwd, sessionId);
-
-    if (config === undefined) {
-      throw new Error('Auto mode internal error: session config is missing.');
-    }
-
-    const blockedToken = getBlockedPathToken(params.command, ctx.cwd, config);
-    const networkDecision = evaluateBashNetworkPolicy(params.command, config.allowedDomains);
-
-    if (blockedToken !== undefined) {
-      const reason = `command references sandbox-controlled path: ${blockedToken}`;
-      logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, reason);
-      const approval = await requestApproval(
-        pi,
+      const { permissionSpec, decision } = createDecision('bash', params, ctx.cwd, sessionId);
+      const autoDenyError = createAutoDenyError(
         ctx.cwd,
         sessionId,
-        signal,
-        ctx.sessionManager,
         'bash',
         permissionSpec,
-        reason,
-        config,
+        decision,
       );
 
-      if (!approval.approve) {
-        throw new Error(`Sandbox blocked: ${approval.reason}`);
+      if (autoDenyError !== undefined) {
+        throw autoDenyError;
       }
 
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
+      logAutoApprovalIfNeeded(ctx.cwd, sessionId, 'bash', permissionSpec, decision);
 
-    if (networkDecision.kind === 'allow-unsandboxed') {
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
-
-    if (networkDecision.kind === 'requires-approval') {
-      logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, networkDecision.reason);
-      const approval = await requestApproval(
-        pi,
-        ctx.cwd,
-        sessionId,
-        signal,
-        ctx.sessionManager,
-        'bash',
-        permissionSpec,
-        networkDecision.reason,
-        config,
-      );
-
-      if (!approval.approve) {
-        throw new Error(`Sandbox blocked: ${approval.reason}`);
+      if (decision.kind === 'auto-approve') {
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
       }
 
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
+      const config = getSessionConfig(ctx.cwd, sessionId);
 
-    const sandboxedBase = createBashToolDefinition(ctx.cwd, {
-      operations: createLocalBashOperationsWithSandbox(
-        createLocalBashOperations(),
-        ctx.cwd,
-        signal,
-        config,
-      ),
-    });
-
-    try {
-      const sandboxedResult = await sandboxedBase.execute(
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-        ctx,
-      );
-      logSrtAllowed(ctx.cwd, sessionId, 'bash', permissionSpec);
-      return sandboxedResult;
-    } catch (error) {
-      const resultText = error instanceof Error ? error.message : String(error);
-      const explicitSandboxError = /Operation not permitted|Connection blocked|sandbox/u.test(
-        resultText,
-      );
-
-      if (!explicitSandboxError) {
-        throw error;
+      if (config === undefined) {
+        throw new Error('Auto mode internal error: session config is missing.');
       }
 
-      const reason = resultText.slice(0, 400);
+      // requireApproval: skip sandbox, go directly to approval agent
+      if (params.requireApproval === true) {
+        const reason = 'Agent requested explicit approval (requireApproval flag)';
+        logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, reason);
+        const approval = await requestApproval(
+          pi,
+          ctx.cwd,
+          sessionId,
+          signal,
+          ctx.sessionManager,
+          'bash',
+          permissionSpec,
+          reason,
+          config,
+        );
 
-      logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, reason);
-      const approval = await requestApproval(
-        pi,
-        ctx.cwd,
-        sessionId,
-        signal,
-        ctx.sessionManager,
-        'bash',
-        permissionSpec,
-        reason,
-        config,
-      );
+        if (!approval.approve) {
+          throw new Error(`Approval denied: ${approval.reason}`);
+        }
 
-      if (!approval.approve) {
-        throw new Error(`Sandbox blocked: ${approval.reason}`);
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
       }
 
-      return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
-    }
-  },
-});
+      const blockedToken = getBlockedPathToken(params.command, ctx.cwd, config);
+      const networkDecision = evaluateBashNetworkPolicy(params.command, config.allowedDomains);
+
+      if (blockedToken !== undefined) {
+        const reason = `command references sandbox-controlled path: ${blockedToken}`;
+        logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, reason);
+        const approval = await requestApproval(
+          pi,
+          ctx.cwd,
+          sessionId,
+          signal,
+          ctx.sessionManager,
+          'bash',
+          permissionSpec,
+          reason,
+          config,
+        );
+
+        if (!approval.approve) {
+          throw new Error(`Sandbox blocked: ${approval.reason}`);
+        }
+
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
+
+      if (networkDecision.kind === 'allow-unsandboxed') {
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
+
+      if (networkDecision.kind === 'requires-approval') {
+        logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, networkDecision.reason);
+        const approval = await requestApproval(
+          pi,
+          ctx.cwd,
+          sessionId,
+          signal,
+          ctx.sessionManager,
+          'bash',
+          permissionSpec,
+          networkDecision.reason,
+          config,
+        );
+
+        if (!approval.approve) {
+          throw new Error(`Sandbox blocked: ${approval.reason}`);
+        }
+
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
+
+      const sandboxedBase = createBashToolDefinition(ctx.cwd, {
+        operations: createLocalBashOperationsWithSandbox(
+          createLocalBashOperations(),
+          ctx.cwd,
+          signal,
+          config,
+        ),
+      });
+
+      try {
+        const sandboxedResult = await sandboxedBase.execute(
+          toolCallId,
+          params,
+          signal,
+          onUpdate,
+          ctx,
+        );
+        logSrtAllowed(ctx.cwd, sessionId, 'bash', permissionSpec);
+        return sandboxedResult;
+      } catch (error) {
+        const resultText = error instanceof Error ? error.message : String(error);
+        const explicitSandboxError = /Operation not permitted|Connection blocked|sandbox/u.test(
+          resultText,
+        );
+
+        if (!explicitSandboxError) {
+          throw error;
+        }
+
+        const reason = resultText.slice(0, 400);
+
+        logSrtBlocked(ctx.cwd, sessionId, 'bash', permissionSpec, reason);
+        const approval = await requestApproval(
+          pi,
+          ctx.cwd,
+          sessionId,
+          signal,
+          ctx.sessionManager,
+          'bash',
+          permissionSpec,
+          reason,
+          config,
+        );
+
+        if (!approval.approve) {
+          throw new Error(`Sandbox blocked: ${approval.reason}`);
+        }
+
+        return unsandboxedBase.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
+    },
+  });
+};
 
 const AUTO_MODE_STATUS_KEY = 'pi-auto:auto-mode';
 

@@ -134,8 +134,8 @@ const buildFilesystemConfig = (_cwd: string, config: AutoConfig): SrtFilesystemC
     denyRead.push(pattern);
   }
 
-  // Default write permissions: cwd and /tmp
-  const allowWrite: string[] = ['.', '/tmp'];
+  // Default write permissions: cwd, /tmp, and ~/.pi/agent (pi settings/credentials)
+  const allowWrite: string[] = ['.', '/tmp', '~/.pi/agent'];
 
   // Add user-configured allowWrite
   for (const pattern of config.allowWrite) {

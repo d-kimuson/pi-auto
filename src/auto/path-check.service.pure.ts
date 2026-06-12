@@ -24,7 +24,7 @@ const DEFAULT_DENY_READ_PATTERNS: readonly string[] = [
   '**/*.key',
 ];
 
-const DEFAULT_ALLOW_WRITE_PATTERNS: readonly string[] = ['.', '/tmp'];
+const DEFAULT_ALLOW_WRITE_PATTERNS: readonly string[] = ['.', '/tmp', '~/.pi/agent'];
 const DEFAULT_DENY_WRITE_PATTERNS: readonly string[] = [
   '.env',
   '.env.local',

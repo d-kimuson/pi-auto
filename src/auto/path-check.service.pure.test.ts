@@ -80,6 +80,11 @@ describe('isWriteAllowed', () => {
     expect(result).toEqual({ allowed: true });
   });
 
+  it('allows writes under ~/.pi/agent by default', () => {
+    const result = isWriteAllowed('~/.pi/agent/settings.json.lock', TEST_CWD, DEFAULT_AUTO_CONFIG);
+    expect(result).toEqual({ allowed: true });
+  });
+
   it('denies writes to .env by default', () => {
     const result = isWriteAllowed('.env', TEST_CWD, DEFAULT_AUTO_CONFIG);
     expect(result.allowed).toBe(false);
