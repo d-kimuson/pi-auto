@@ -37,6 +37,9 @@
     "release": "node scripts/release.ts",
     "build": "echo No build step required for pi package"
   },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.49"
+  },
   "devDependencies": {
     "@tsconfig/strictest": "2.0.8",
     "@types/node": "25.9.0",
@@ -74,8 +77,5 @@
     "themes": [
       "./themes"
     ]
-  },
-  "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.49"
   }
 }
